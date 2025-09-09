@@ -1,0 +1,3 @@
+d2vr5ejok8rs73cucut0  # Circuits 0-9
+d301rqputc7s73aq00ng  # Circuits 10-29
+d302brk7sg0c73ar7510  # Circuits 30-64
