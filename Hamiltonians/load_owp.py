@@ -1,11 +1,4 @@
-"""Load the OWP (Organic Water Peroxide) reactant Hamiltonian.
-
-This loads the 44-qubit Hamiltonian from owp_reactant.npz
-based on the notebook: https://github.com/rmlarose/calibrate-ibm/blob/main/owp_ibm.ipynb
-
-Note: The notebook reports ~938k terms for the FermionOperator before Jordan-Wigner.
-After Jordan-Wigner transformation, we get ~67k qubit operator terms.
-"""
+"""Loads the OWP reactant or product Hamiltonian."""
 
 import numpy as np
 from openfermion import InteractionOperator, get_fermion_operator, jordan_wigner, count_qubits
@@ -16,22 +9,32 @@ def load_owp_hamiltonian(npz_path):
     """Load OWP Hamiltonian from .npz file.
 
     Args:
-        npz_path: Path to owp_reactant.npz file
+        npz_path: Path to .npz file (e.g., owp_reactant.npz or owp_product.npz)
 
     Returns:
         tuple: (hamiltonian, nqubits, nterms)
             - hamiltonian: QubitOperator after Jordan-Wigner transformation
-            - nqubits: Number of qubits (should be 44)
+            - nqubits: Number of qubits
             - nterms: Number of terms in the Hamiltonian
     """
     # Load data
     data = np.load(npz_path)
 
-    ECORE = float(data["ECORE"])
-    H1 = data["H1"]
-    H2 = data["H2"]
-    NORB = int(data["NORB"])
-    NELEC = int(data["NELEC"])
+    # Handle both uppercase (reactant) and lowercase (product) key formats
+    if "ECORE" in data:
+        ECORE = float(data["ECORE"])
+        H1 = data["H1"]
+        H2 = data["H2"]
+        NORB = int(data["NORB"])
+        NELEC = int(data["NELEC"])
+    elif "e_nuc" in data:
+        ECORE = float(data["e_nuc"])
+        H1 = data["h1"]
+        H2 = data["h2"]
+        NORB = H1.shape[0]  # Infer from h1 matrix shape
+        NELEC = int(data["nelectron"])
+    else:
+        raise KeyError(f"Unrecognized npz format. Keys: {list(data.keys())}")
 
     print(f"Loaded OWP Hamiltonian:")
     print(f"  Core energy: {ECORE}")
