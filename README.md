@@ -5,8 +5,8 @@ Files are organized as
 ```text
 experiments/
   experiment_name/
-    circuits/      # Usually .qasm files of circuit(s).
-    hamiltonians/  # Usually .npz or .hdf5 files of Hamiltonian(s).
+    circuits/      # Usually .qasm files of circuit(s). Sometimes generated in scripts.
+    hamiltonians/  # Usually .npz or .hdf5 files of Hamiltonian(s). Sometimes generated in scripts.
     results/       # Usually .pkl of bitstrings sampled from hardware.
     experiment_name.ipynb  # Script to read in circuit and Hamiltonian, run on hardware, and save results.
 ```
