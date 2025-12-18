@@ -1,0 +1,22 @@
+[project]
+name = "calibrate-ibm-compilation"
+version = "0.1.0"
+requires-python = "==3.12.*"
+dependencies = [
+    "bqskit>=1.2.1",
+    "bqskitrs>=0.4.1",
+    "circ>=0.0.1",
+    "cirq>=1.6.1",
+    "ply>=3.11",
+    "pytket>=2.10.2",
+    "pytket-qiskit>=0.72.0",
+    "pytket-quantinuum>=0.54.0",
+    "qiskit>=2.2.3",
+]
+
+[dependency-groups]
+dev = [
+    "black>=25.9.0",
+    "flake8>=7.3.0",
+    "mypy>=1.18.2",
+]
