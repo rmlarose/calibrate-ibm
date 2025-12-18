@@ -1,0 +1,4 @@
+qiskit
+cirq-core
+openfermion
+qiskit-addon-sqd
