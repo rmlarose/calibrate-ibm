@@ -1,0 +1,50 @@
+#!/bin/bash
+#SBATCH --job-name=kcommute_test
+#SBATCH --time=02:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=4GB
+#SBATCH --array=0-5
+#SBATCH --constraint=amd24
+#SBATCH --output=logs/job_%A_%a.out
+#SBATCH --error=logs/job_%A_%a.err
+
+# Create logs directory if it doesn't exist
+mkdir -p logs
+
+cd /mnt/home/rowlan91/kcommute
+
+# Array job assignments:
+# 0: validation k=1
+# 1: validation k=4
+# 2: validation k=N
+# 3: timing test (full comparison)
+# 4: timing v1 only
+# 5: timing v2 only
+
+case $SLURM_ARRAY_TASK_ID in
+    0)
+        echo "Running validation test for k=1"
+        python3 tests/test_k1.py
+        ;;
+    1)
+        echo "Running validation test for k=4"
+        python3 tests/test_k4.py
+        ;;
+    2)
+        echo "Running validation test for k=N"
+        python3 tests/test_kN.py
+        ;;
+    3)
+        echo "Running full timing comparison"
+        python3 timing/time_get_si_sets_v2.py
+        ;;
+    4)
+        echo "Running timing for v1 only"
+        python3 timing/time_v1_only.py
+        ;;
+    5)
+        echo "Running timing for v2 only"
+        python3 timing/time_v2_only.py
+        ;;
+esac
