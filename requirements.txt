@@ -4,3 +4,4 @@ qiskit-ibm-runtime
 cirq-core
 openfermion
 qiskit-addon-sqd
+qiskit-qasm3-import
