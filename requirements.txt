@@ -1,4 +1,6 @@
 qiskit
+qiskit-aer
+qiskit-ibm-runtime
 cirq-core
 openfermion
 qiskit-addon-sqd
