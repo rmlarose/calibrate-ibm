@@ -101,7 +101,9 @@ python plot_determinants.py   # -> plots/sym_vs_nosym_dets.png
 
 Best energy: **-261.9171 Ha** (sym cumulative [1,...,20], 501 iterations) vs CCSD reference of -261.9430 Ha.
 
-![Energy comparison](plots/sym_vs_nosym_energy.png)
+![Energy](plots/singleton_vs_cumulative.png)
+
+![Iterations](plots/singleton_vs_cumulative_iters.png)
 
 See `results.md` for full tables.
 

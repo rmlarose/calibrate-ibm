@@ -23,17 +23,11 @@ This variant tests whether removing those synthetic combinations:
 
 ## Results
 
-| Metric | Sym (best) | NoSym (best) | CCSD |
-|--------|-----------|-------------|------|
-| Best cumulative energy | -261.9171 Ha | -261.9016 Ha | -261.9430 Ha |
-| Best singleton energy | -261.8632 Ha | -261.8278 Ha | — |
-| Typical det count (cumul, converged) | 33k–69k | 12k–31k | — |
+![Energy: Sym vs NoSym](../plots/sym_vs_nosym_energy.png)
 
-Symmetrization consistently reaches lower energies (~15 mHa better for
-cumulatives). The larger CI space from the union step provides more
-variational freedom, which outweighs the cost of including unmeasured
-combinations. NoSym uses roughly half the determinants but converges to
-higher energies.
+![Iterations: Sym vs NoSym](../plots/sym_vs_nosym_iters.png)
+
+![Determinants: Sym vs NoSym](../plots/sym_vs_nosym_dets.png)
 
 See `../results.md` for full tables.
 
