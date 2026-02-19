@@ -1,7 +1,7 @@
-# SQD + SBD (GPU) Results — No-S² Case
+# SQD + SBD (GPU) Results
 
 ATP fragment `atp_0_be2_f4` (32 orbitals, 32 electrons).
-Convergence criterion: δE < 1e-8 AND δOcc < 1e-8.
+Convergence criterion: ΔE < 1e-8 AND ΔOcc < 1e-8.
 
 ## Singletons — Symmetrized (Sym)
 

@@ -47,5 +47,4 @@ This is **not feasible** without modifying the CI solver internals:
 
 Keeping bitstrings as paired determinants would require overhauling these CI
 solver internals to only include specific (alpha_i, beta_i) pairs rather than
-the full cross-product. This is a much deeper change to the solver
-architecture and is outside the scope of this work.
+the full cross-product.
