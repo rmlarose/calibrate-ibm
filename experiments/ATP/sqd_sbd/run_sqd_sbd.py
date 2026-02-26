@@ -1,5 +1,9 @@
 """
-Full SQD loop for ATP fragment using SBD (GPU) for diagonalization.
+Unified SQD loop using SBD (GPU) for diagonalization.
+
+Supports two modes:
+  - Default (symmetrized spin): alpha/beta CI strings merged into one set
+  - --semiclassical_counts: merge pre-generated bitstring counts with hardware data
 
 Replicates the behavior of qiskit-addon-sqd's diagonalize_fermionic_hamiltonian
 but uses SBD instead of PySCF for the Selected CI diagonalization.
@@ -14,6 +18,7 @@ import pickle
 import collections
 import glob
 import sys
+import time
 
 import numpy as np
 import matplotlib
@@ -123,10 +128,11 @@ def run_sbd(ci_strings_a, ci_strings_b, fcidump_path, sbd_exe, norb,
             carryover_a=None, carryover_b=None,
             carryover_threshold=1e-5,
             block=10, tolerance=1e-6, max_davidson=200,
-            spin_sq_shift=0.0):
+            num_gpus=1):
     """Run SBD diag executable and return energy + occupancies + carryover."""
     with tempfile.TemporaryDirectory() as tmpdir:
         adet_path = os.path.join(tmpdir, "AlphaDets.txt")
+        bdet_path_actual = None
 
         # Merge carryover strings with sampled strings (carryover first for priority)
         all_a = ci_strings_a
@@ -137,18 +143,18 @@ def run_sbd(ci_strings_a, ci_strings_b, fcidump_path, sbd_exe, norb,
 
         bdet_args = []
         if ci_strings_b is not None and not np.array_equal(ci_strings_a, ci_strings_b):
-            bdet_path = os.path.join(tmpdir, "BetaDets.txt")
+            bdet_path_actual = os.path.join(tmpdir, "BetaDets.txt")
             all_b = ci_strings_b
             if carryover_b is not None and len(carryover_b) > 0:
                 all_b = np.unique(np.concatenate([carryover_b, ci_strings_b]))
-            ci_strings_to_file(all_b, norb, bdet_path)
-            bdet_args = ["--bdetfile", bdet_path]
+            ci_strings_to_file(all_b, norb, bdet_path_actual)
+            bdet_args = ["--bdetfile", bdet_path_actual]
 
         wf_path = os.path.join(tmpdir, "wf.txt")
 
         mpirun = os.environ.get("MPIRUN", "mpirun")
         cmd = [
-            mpirun, "-np", "1",
+            mpirun, "--oversubscribe", "-np", str(num_gpus),
             sbd_exe,
             "--fcidump", fcidump_path,
             "--adetfile", adet_path,
@@ -161,9 +167,6 @@ def run_sbd(ci_strings_a, ci_strings_b, fcidump_path, sbd_exe, norb,
             "--use_precalculated_dets", "1",
             "--dump_matrix_form_wf", wf_path,
         ]
-
-        if spin_sq_shift > 0.0:
-            cmd.extend(["--spin_sq_shift", str(spin_sq_shift)])
 
         env = os.environ.copy()
         env["OMP_NUM_THREADS"] = "1"
@@ -179,7 +182,7 @@ def run_sbd(ci_strings_a, ci_strings_b, fcidump_path, sbd_exe, norb,
             print(f"SBD STDOUT: {result.stdout}", file=sys.stderr)
             raise RuntimeError("Failed to parse energy from SBD output")
 
-        # Extract carryover from CI amplitudes (matching original qiskit-addon-sqd logic)
+        # Extract carryover from CI amplitudes
         co_a, co_b = np.array([], dtype=np.int64), np.array([], dtype=np.int64)
         if os.path.exists(wf_path):
             co_a, co_b = extract_carryover_from_wf(
@@ -217,8 +220,11 @@ def load_and_process_bitstrings(fragment, circuit_dir, hamiltonian_dir, results_
     all_counts = []
 
     for adapt_iter in adapt_iterations:
-        fname = glob.glob(f"{results_dir}/{fragment}/*{adapt_iter:03d}*.qasm*")[0]
-        counts = pickle.load(open(fname, "rb"))
+        fnames = sorted(glob.glob(f"{results_dir}/{fragment}/*{adapt_iter:03d}*.qasm*"))
+        if not fnames:
+            raise FileNotFoundError(
+                f"No bitstring files found for ADAPT iter {adapt_iter} "
+                f"in {results_dir}/{fragment}/")
         mode_order = pickle.load(
             open(f"{circuit_dir}/{fragment}/{fragment}_mode_order_{adapt_iter:03d}_adaptiterations.pkl", "rb")
         )
@@ -226,15 +232,25 @@ def load_and_process_bitstrings(fragment, circuit_dir, hamiltonian_dir, results_
             open(f"{circuit_dir}/{fragment}/{fragment}_qubit_order_{adapt_iter:03d}_adaptiterations.pkl", "rb")
         )
 
+        # Load and merge ALL matching files for this ADAPT iteration
+        iter_total_unique = 0
+        iter_total_shots = 0
         permuted = {}
-        for orig_bs in counts.keys():
-            qp = "".join([orig_bs[qubit_order.index(n)] for n in range(nqubits)])
-            mp = "".join([qp[mode_order.index(n)] for n in range(nqubits)])
-            final = transform_bitstring(mp)
-            permuted[final] = counts[orig_bs]
+        for fname in fnames:
+            counts = pickle.load(open(fname, "rb"))
+            iter_total_unique += len(counts)
+            iter_total_shots += sum(counts.values())
+            for orig_bs in counts.keys():
+                qp = "".join([orig_bs[qubit_order.index(n)] for n in range(nqubits)])
+                mp = "".join([qp[mode_order.index(n)] for n in range(nqubits)])
+                final = transform_bitstring(mp)
+                permuted[final] = permuted.get(final, 0) + counts[orig_bs]
 
         all_counts.append(permuted)
-        print(f"  ADAPT iter {adapt_iter}: {len(counts)} unique, {sum(counts.values())} shots")
+        n_files = len(fnames)
+        files_str = f" ({n_files} files)" if n_files > 1 else ""
+        print(f"  ADAPT iter {adapt_iter}: {iter_total_unique} raw unique, "
+              f"{iter_total_shots} shots{files_str} -> {len(permuted)} merged unique")
 
     # Merge
     merged = collections.Counter()
@@ -297,19 +313,30 @@ def main():
     parser.add_argument("--energy_tol", type=float, default=1e-8)
     parser.add_argument("--occupancies_tol", type=float, default=1e-8)
     parser.add_argument("--carryover_threshold", type=float, default=1e-5)
-    parser.add_argument("--spin_sq_shift", type=float, default=0.0,
-                        help="Spin-squared diagonal penalty shift (0 to disable)")
+    parser.add_argument("--num_gpus", type=int, default=1,
+                        help="Number of GPUs for SBD (MPI ranks)")
+    parser.add_argument("--semiclassical_counts", type=str, default=None,
+                        help="Path to pre-generated semiclassical counts pickle")
     parser.add_argument("--resume", action="store_true",
                         help="Resume from checkpoint if available")
     parser.add_argument("adapt_iterations", type=int, nargs='*', default=[1, 2, 3, 4, 5, 10, 20, 25, 30, 40])
     args = parser.parse_args()
 
+    if not args.semiclassical_counts and not args.adapt_iterations:
+        parser.error("Must provide --semiclassical_counts and/or ADAPT iteration indices")
+
     os.makedirs(args.output_dir, exist_ok=True)
 
-    iters_key = "_".join(map(str, args.adapt_iterations))
+    # Build iteration key (include "0" for semiclassical)
+    all_iters = []
+    if args.semiclassical_counts:
+        all_iters.append(0)
+    all_iters.extend(args.adapt_iterations)
+    iters_key = "_".join(map(str, all_iters))
     checkpoint_path = os.path.join(args.output_dir, f"checkpoint_{iters_key}.pkl")
     energy_file = os.path.join(args.output_dir, f"sqd_energies_{iters_key}.txt")
     occ_file = os.path.join(args.output_dir, f"sqd_occupancies_{iters_key}.txt")
+    stats_file = os.path.join(args.output_dir, f"sqd_stats_{iters_key}.txt")
     plot_file = os.path.join(args.output_dir, f"sqd_convergence_{iters_key}.pdf")
 
     # Read Hamiltonian
@@ -324,11 +351,25 @@ def main():
     print(f"  NORB={n_orbitals}, NELEC={num_electrons}, ECORE={ecore}")
 
     # Load measurement data (raw, before postselection)
-    print("Loading measurement data...")
-    merged_counts = load_and_process_bitstrings(
-        args.fragment, args.circuit_dir, args.hamiltonian_dir,
-        args.results_dir, args.adapt_iterations, n_orbitals, num_electrons
-    )
+    merged_counts = collections.Counter()
+
+    if args.semiclassical_counts:
+        print(f"Loading semiclassical counts from {args.semiclassical_counts}...")
+        with open(args.semiclassical_counts, 'rb') as f:
+            sc_counts = pickle.load(f)
+        for bs, count in sc_counts.items():
+            merged_counts[bs] += count
+        print(f"  Semiclassical: {len(sc_counts)} unique, {sum(sc_counts.values())} shots")
+
+    if args.adapt_iterations:
+        print("Loading measurement data...")
+        hw_counts = load_and_process_bitstrings(
+            args.fragment, args.circuit_dir, args.hamiltonian_dir,
+            args.results_dir, args.adapt_iterations, n_orbitals, num_electrons
+        )
+        for bs, count in hw_counts.items():
+            merged_counts[bs] += count
+
     print(f"  Total: {len(merged_counts)} unique bitstrings, {sum(merged_counts.values())} shots")
 
     # Convert to matrix form - keep RAW bitstrings for config recovery
@@ -353,6 +394,7 @@ def main():
 
     iteration_energies = []
     all_occupancies = []
+    iteration_stats = []  # per-iteration: {ci_strings, determinants, pool_size, carryover, wall_sec}
     start_iteration = 0
 
     # Resume from checkpoint if available
@@ -370,10 +412,12 @@ def main():
         current_occupancies = ckpt['current_occupancies']
         rng = ckpt['rng']
         start_iteration = ckpt['next_iteration']
+        iteration_stats = ckpt.get('iteration_stats', [])
         print(f"  Resuming at iteration {start_iteration + 1}, "
               f"best energy so far: {best_ever_energy:.10f} Ha")
 
     for iteration in range(start_iteration, args.max_iterations):
+        iter_t0 = time.time()
         print(f"\n--- SQD Iteration {iteration + 1} ---")
         sys.stdout.flush()
 
@@ -393,7 +437,8 @@ def main():
                 hamming_right=n_alpha, hamming_left=n_beta
             )
 
-        print(f"  After postselect/recovery: {len(bitstrings)} unique bitstrings")
+        pool_size = len(bitstrings)
+        print(f"  After postselect/recovery: {pool_size} unique bitstrings")
 
         # Step 2: Subsample batches
         batches = subsample(
@@ -407,16 +452,21 @@ def main():
         batch_energies = []
         batch_occupancies = []
         batch_carryover = []
+        batch_ci_counts = []
 
         for b, batch in enumerate(batches):
             ci_strings = extract_ci_strings(batch, n_orbitals)
+            ci_alpha = ci_strings
+            ci_beta = None
+            n_dets = len(ci_strings) ** 2
+            batch_ci_counts.append(len(ci_strings))
             print(f"  Batch {b}: {len(ci_strings)} unique CI strings "
-                  f"({len(ci_strings)**2} determinants)")
+                  f"({n_dets} determinants)")
             sys.stdout.flush()
 
             energy, density, occ_alpha, occ_beta, co_a, co_b = run_sbd(
-                ci_strings_a=ci_strings,
-                ci_strings_b=None,  # symmetrize: beta = alpha
+                ci_strings_a=ci_alpha,
+                ci_strings_b=ci_beta,
                 fcidump_path=fcidump_path,
                 sbd_exe=args.sbd_exe,
                 norb=n_orbitals,
@@ -426,7 +476,7 @@ def main():
                 block=10,
                 tolerance=1e-9,
                 max_davidson=10000,
-                spin_sq_shift=args.spin_sq_shift,
+                num_gpus=args.num_gpus,
             )
 
             total_energy = energy + ecore
@@ -439,6 +489,7 @@ def main():
         best_idx = np.argmin(batch_energies)
         best_energy = batch_energies[best_idx]
         best_occ_alpha, best_occ_beta = batch_occupancies[best_idx]
+        best_ci_count = batch_ci_counts[best_idx]
         iteration_energies.append(best_energy)
         all_occupancies.append((best_occ_alpha + best_occ_beta) / 2.0)  # store avg for plotting
 
@@ -452,6 +503,8 @@ def main():
             carryover_a = np.unique(np.concatenate(all_co))
             carryover_b = carryover_a
             print(f"  Carryover: {len(carryover_a)} strings")
+
+        n_carryover = len(carryover_a) if carryover_a is not None else 0
 
         # Track best-ever energy
         if best_ever_energy is None or best_energy < best_ever_energy:
@@ -478,12 +531,39 @@ def main():
         current_energy = best_energy
         current_occ = (best_occ_alpha, best_occ_beta)
 
+        # Record per-iteration stats
+        iter_wall_sec = time.time() - iter_t0
+        n_dets_approx = best_ci_count ** 2
+        stats = {
+            'iteration': iteration + 1,
+            'energy': best_energy,
+            'ci_strings': best_ci_count,
+            'determinants': n_dets_approx,
+            'pool_size': pool_size,
+            'carryover': n_carryover,
+            'wall_sec': iter_wall_sec,
+        }
+        iteration_stats.append(stats)
+        print(f"  Wall time: {iter_wall_sec:.1f}s | CI strings: {best_ci_count} | "
+              f"Dets: {n_dets_approx} | Pool: {pool_size} | Carryover: {n_carryover}")
+
         # Checkpoint: save state after each iteration
         np.savetxt(energy_file, iteration_energies)
         np.savetxt(occ_file, all_occupancies[-1])
+
+        # Write stats file (rewrite each iteration for consistency)
+        with open(stats_file, 'w') as f:
+            f.write(f"# {'iter':>4s}  {'energy':>18s}  {'ci_strings':>10s}  {'determinants':>12s}  "
+                    f"{'pool_size':>10s}  {'carryover':>10s}  {'wall_sec':>10s}\n")
+            for s in iteration_stats:
+                f.write(f"  {s['iteration']:>4d}  {s['energy']:>18.10f}  {s['ci_strings']:>10d}  "
+                        f"{s['determinants']:>12d}  {s['pool_size']:>10d}  {s['carryover']:>10d}  "
+                        f"{s['wall_sec']:>10.1f}\n")
+
         ckpt = {
             'iteration_energies': iteration_energies,
             'all_occupancies': all_occupancies,
+            'iteration_stats': iteration_stats,
             'carryover_a': carryover_a,
             'carryover_b': carryover_b,
             'best_ever_energy': best_ever_energy,
@@ -502,18 +582,23 @@ def main():
             break
 
     # Final results summary
+    total_wall = sum(s['wall_sec'] for s in iteration_stats)
     print(f"\n{'='*60}")
     print("Results")
     print(f"{'='*60}")
     for i, e in enumerate(iteration_energies):
-        print(f"  Iteration {i+1}: {e:.10f} Ha")
+        wall = iteration_stats[i]['wall_sec'] if i < len(iteration_stats) else 0
+        print(f"  Iteration {i+1}: {e:.10f} Ha  ({wall:.1f}s)")
     print(f"\n  Best ever: {best_ever_energy:.10f} Ha")
+    print(f"  Total wall time: {total_wall:.1f}s ({total_wall/60:.1f}min)")
 
     np.savetxt(energy_file, iteration_energies)
     print(f"\nSaved energies to {energy_file}")
 
     np.savetxt(occ_file, all_occupancies[-1])
     print(f"Saved occupancies to {occ_file}")
+
+    print(f"Saved stats to {stats_file}")
 
     # Generate publication-quality plots (matching repo style)
     chem_accuracy = 0.001  # 1 mHa

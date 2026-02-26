@@ -1,0 +1,32 @@
+{
+  "checkpoint": "results_100k/semiclassical_0/checkpoint_0.pkl",
+  "converged_energy": -261.9214538834748,
+  "n_iterations": 56,
+  "batches": [
+    {
+      "batch": 0,
+      "energy": -261.9214538834748,
+      "n_ci_strings": 1266,
+      "n_determinants": 1602756,
+      "n_amplitudes": 1602756,
+      "ipr": 1.265746902223779,
+      "n_above_1e2": 1,
+      "n_above_1e3": 10,
+      "n_above_1e4": 80,
+      "n_above_1e5": 1674
+    },
+    {
+      "batch": 1,
+      "energy": -261.9214538834747,
+      "n_ci_strings": 1266,
+      "n_determinants": 1602756,
+      "n_amplitudes": 1602756,
+      "ipr": 1.2657469022237968,
+      "n_above_1e2": 1,
+      "n_above_1e3": 10,
+      "n_above_1e4": 80,
+      "n_above_1e5": 1674
+    }
+  ],
+  "avg_ipr": 1.265746902223788
+}

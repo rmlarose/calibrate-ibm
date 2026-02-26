@@ -1,27 +1,58 @@
-# SQD + SBD (GPU) for ATP Fragment
+# SQD + SBD (GPU) for Molecular Fragments
 
 GPU-accelerated [Sample-based Quantum Diagonalization (SQD)](https://arxiv.org/abs/2405.05068) using [SBD](https://github.com/r-ccs-cms/sbd) (Selected Basis Diagonalization) as the CI solver, replacing PySCF's CPU-based Selected CI.
 
-Applied to the ATP fragment `atp_0_be2_f4` (32 orbitals, 32 electrons) using 100k-shot measurements from IBM Boston.
+Applied to three molecular fragments using measurements from IBM quantum hardware:
+- **ATP f4** (32 orbitals, 32 electrons) — hardware, nosym, and semiclassical variants
+- **ATP f2** (44 orbitals, 44 electrons) — hardware
+- **Metaphosphate** (22 orbitals, 32 electrons) — hardware (via symlink)
 
 ## Directory structure
 
 ```
 sqd_sbd/
-├── run_sqd_sbd.py          # SQD loop (symmetrized spin)
-├── submit_sqd_sbd.sh       # SLURM submission script
-├── plot_results.py          # Singleton vs cumulative (sym only)
-├── plot_comparison.py       # 4-trendline sym vs nosym comparison
-├── plot_determinants.py     # Determinant count comparison
-├── results.md               # Summary tables for all runs
-├── results/                 # Sym energy convergence files
-├── plots/                   # Generated PNGs
-└── nosym/                   # No-symmetrization variant
-    ├── README.md            # Explains approach and nosplit infeasibility
-    ├── run_sqd_nosym.py     # Nosym SQD loop
-    ├── submit_sqd_nosym.sh  # SLURM submission
-    └── results/             # Nosym energy convergence files
+├── run_sqd_sbd.py               # Unified SQD loop (sym, nosym, semiclassical)
+├── check_status.py              # Zero-argument status report for all fragments
+├── plot_all.py                  # Zero-argument plot generation for all fragments
+├── generate_random_bitstrings.py
+├── README.md
+├── results.md                   # Legacy summary tables
+│
+├── f4/                          # ATP fragment f4 (32 orb, 32 elec)
+│   ├── results/
+│   │   ├── hardware/            # singleton_N/, cumulative_X_Y_.../ (sym)
+│   │   ├── nosym/               # singleton_N/, cumulative_X_Y_.../ (no spin sym)
+│   │   └── semiclassical/       # results_10k/, results_50k/, etc.
+│   ├── data/                    # counts_*.pkl, f4.wf, f4-energies.txt, ipr_results/
+│   ├── plots/
+│   ├── submit_singletons.sh
+│   ├── submit_cumulatives.sh
+│   ├── sample_wavefunction.py   # f4-specific ASCI wavefunction sampler
+│   ├── compute_ipr.py           # f4-specific IPR analysis
+│   └── NOSYM_README.md
+│
+├── f2/                          # ATP fragment f2 (44 orb, 44 elec)
+│   ├── results/
+│   │   └── hardware/            # singleton_N/, cumulative_X_Y_.../
+│   ├── plots/
+│   ├── submit_singletons.sh
+│   └── submit_cumulatives.sh
+│
+└── (metaphosphate via ../../metaphosphate/sqd_sbd/)
+    ├── run_sqd_sbd.py -> symlink to ATP/sqd_sbd/run_sqd_sbd.py
+    ├── results/
+    │   └── hardware/            # singleton_N/, cumulative_X_Y_.../
+    ├── plots/
+    ├── submit_singletons.sh
+    └── submit_cumulatives.sh
 ```
+
+Each result subdirectory contains:
+- `sqd_energies_<label>.txt` — energy per iteration
+- `sqd_stats_<label>.txt` — iter, energy, ci_strings, dets, pool_size, carryover, wall_sec
+- `sqd_occupancies_<label>.txt` — orbital occupancies per iteration
+- `checkpoint_<label>.pkl` — resumable state
+- `sqd_convergence_<label>.pdf` — convergence plot
 
 ## Requirements
 
@@ -60,52 +91,53 @@ Scripts use relative paths to reference data already in this repository (circuit
 ```bash
 cd experiments/ATP/sqd_sbd
 
-# Single run (e.g., cumulative [1,2,3,4,5])
+# Symmetrized spin (default)
 python run_sqd_sbd.py \
     --sbd_exe /path/to/sbd/diag \
-    --output_dir ./results/cumulative_1_2_3_4_5 \
+    --output_dir f4/results/hardware/cumulative_1_2_3_4_5 \
     --max_iterations 2000 \
     --resume \
     1 2 3 4 5
 
-# SLURM batch (set SBD_EXE environment variable)
-export SBD_EXE=/path/to/sbd/diag
-sbatch submit_sqd_sbd.sh
+# No spin symmetrization
+python run_sqd_sbd.py \
+    --nosym \
+    --sbd_exe /path/to/sbd/diag \
+    --output_dir f4/results/nosym/singleton_5 \
+    --max_iterations 2000 \
+    5
+
+# Semiclassical (merge ASCI-sampled bitstrings with hardware data)
+python run_sqd_sbd.py \
+    --semiclassical_counts f4/data/counts_100000.pkl \
+    --sbd_exe /path/to/sbd/diag \
+    --output_dir f4/results/semiclassical/results_100k \
+    --max_iterations 2000
+
+# SLURM batch (see per-fragment submit scripts)
+sbatch f4/submit_singletons.sh
+sbatch f2/submit_cumulatives.sh
 ```
 
 The positional arguments are ADAPT-VQE iteration indices. A single index runs a "singleton" experiment; multiple indices pool the measurement data ("cumulative").
 
-### No-symmetrization variant
+Multiple bitstring files per ADAPT iteration are automatically merged (enabling pooled shot counts from multiple hardware runs).
+
+## Status and plots
 
 ```bash
-cd nosym
-python run_sqd_nosym.py \
-    --sbd_exe /path/to/sbd/diag \
-    --output_dir ./results/singleton_5 \
-    --max_iterations 2000 \
-    5
-```
-
-See `nosym/README.md` for details on the approach.
-
-## Regenerating plots
-
-```bash
-cd experiments/ATP/sqd_sbd
-python plot_results.py        # -> plots/singleton_vs_cumulative{,_iters}.png
-python plot_comparison.py     # -> plots/sym_vs_nosym_{energy,iters}.png
-python plot_determinants.py   # -> plots/sym_vs_nosym_dets.png
+python check_status.py    # prints tables for all fragments, writes status.json
+python plot_all.py        # generates plots in each fragment's plots/ directory
 ```
 
 ## Results
 
-Best energy: **-261.9171 Ha** (sym cumulative [1,...,20], 501 iterations) vs CCSD reference of -261.9430 Ha.
+Best energies:
+- **f4**: -261.9171 Ha (sym cumulative [1,...,20], 501 iterations)
+- **f2**: -422.6237 Ha (cumulative [1,...,25], 71 iterations, not converged)
+- **Metaphosphate**: -1121.8057 Ha (cumulative [1,...,10], 76 iterations, not converged)
 
-![Energy](plots/singleton_vs_cumulative.png)
-
-![Iterations](plots/singleton_vs_cumulative_iters.png)
-
-See `results.md` for full tables.
+See `results.md` for legacy tables, or run `python check_status.py` for current status.
 
 ## References
 
