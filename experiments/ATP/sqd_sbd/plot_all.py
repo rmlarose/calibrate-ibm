@@ -50,6 +50,20 @@ def load_ccsd_energies():
     return energies
 
 
+# Standard SC/random variant suffixes applied to every fragment.
+# Paths are relative to each fragment's results_prefix.
+# Variants whose directories don't exist are silently skipped.
+STANDARD_SC_VARIANTS = [
+    ('SC 10k',  'semiclassical/results_10k'),
+    ('SC 50k',  'semiclassical/results_50k'),
+    ('SC 100k', 'semiclassical/results_100k'),
+]
+
+STANDARD_RANDOM_VARIANTS = [
+    ('Random Hamming 50k', 'semiclassical/results_random_hamming_50k'),
+    ('Random IID 50k',     'semiclassical/results_random_iid_50k'),
+]
+
 # Fragment definitions
 FRAGMENTS = [
     {
@@ -57,47 +71,28 @@ FRAGMENTS = [
         'fragment_name': 'atp_0_be2_f4',
         'norb': 32, 'nelec': 32,
         'base': SCRIPT_DIR,
+        'results_prefix': 'f4/results',
         'plots_dir': 'f4/plots',
         'hamiltonian': os.path.join(SCRIPT_DIR, '..', 'hamiltonians', 'atp_0_be2_f4.fcidump'),
-        'variants': [
-            ('Hardware', 'f4/results/hardware'),
-        ],
-        'sc_variants': [
-            ('SC 10k', 'f4/results/semiclassical/results_10k'),
-            ('SC 50k', 'f4/results/semiclassical/results_50k'),
-            ('SC 100k', 'f4/results/semiclassical/results_100k'),
-        ],
-        'random_variants': [
-            ('Random Hamming 50k', 'f4/results/semiclassical/results_random_hamming_50k'),
-            ('Random IID 50k', 'f4/results/semiclassical/results_random_iid_50k'),
-        ],
     },
     {
         'label': 'ATP f2',
         'fragment_name': 'atp_0_be2_f2',
         'norb': 44, 'nelec': 44,
         'base': SCRIPT_DIR,
+        'results_prefix': 'f2/results',
         'plots_dir': 'f2/plots',
         'hamiltonian': os.path.join(SCRIPT_DIR, '..', 'hamiltonians', 'atp_0_be2_f2.fcidump'),
-        'variants': [
-            ('Hardware', 'f2/results/hardware'),
-        ],
-        'sc_variants': [],
-        'random_variants': [],
     },
     {
         'label': 'Metaphosphate',
         'fragment_name': 'metaphosphate-2026',
         'norb': 22, 'nelec': 32,
         'base': os.path.join(SCRIPT_DIR, '..', '..', 'metaphosphate', 'sqd_sbd'),
+        'results_prefix': 'results',
         'plots_dir': 'plots',
         'hamiltonian': os.path.join(SCRIPT_DIR, '..', '..', 'metaphosphate', 'hamiltonians',
                                     'metaphosphate-2026.fcidump'),
-        'variants': [
-            ('Hardware', 'results/hardware'),
-        ],
-        'sc_variants': [],
-        'random_variants': [],
     },
 ]
 
@@ -361,28 +356,28 @@ def make_fragment_plots(frag, e_hf, e_ccsd=None):
     os.makedirs(plots_dir, exist_ok=True)
 
     # Load hardware variants
+    prefix = frag['results_prefix']
     hw_variants = {}
-    for variant_name, variant_rel in frag['variants']:
-        variant_dir = os.path.join(base, variant_rel)
-        singletons, cumulatives = discover_and_load(variant_dir)
-        if singletons or cumulatives:
-            hw_variants[variant_name] = (singletons, cumulatives)
+    hw_dir = os.path.join(base, prefix, 'hardware')
+    singletons, cumulatives = discover_and_load(hw_dir)
+    if singletons or cumulatives:
+        hw_variants['Hardware'] = (singletons, cumulatives)
 
     if not hw_variants:
         print(f"  No results found for {frag['label']}, skipping plots")
         return
-
-    # Load SC and random variants
     sc_loaded = []  # (label, runs_dict)
-    for label, rel_path in frag.get('sc_variants', []):
-        singleton, runs = discover_and_load_sc(os.path.join(base, rel_path))
+    for label, suffix in STANDARD_SC_VARIANTS:
+        variant_dir = os.path.join(base, prefix, suffix)
+        singleton, runs = discover_and_load_sc(variant_dir)
         if runs:
             sc_loaded.append((label, runs))
 
     random_loaded = []
     random_singletons = []  # singleton results for "best random-only" reference line
-    for label, rel_path in frag.get('random_variants', []):
-        singleton, runs = discover_and_load_sc(os.path.join(base, rel_path))
+    for label, suffix in STANDARD_RANDOM_VARIANTS:
+        variant_dir = os.path.join(base, prefix, suffix)
+        singleton, runs = discover_and_load_sc(variant_dir)
         if singleton is not None:
             random_singletons.append(singleton)
         if runs:
