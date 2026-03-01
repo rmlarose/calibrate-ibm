@@ -71,57 +71,17 @@ def parse_sbd_output(stdout):
     return energy, density, density_alpha, density_beta
 
 
-def extract_carryover_from_wf(wf_path, adet_path, norb, carryover_threshold):
-    """Extract carryover determinants from SBD's wavefunction dump.
-
-    Replicates qiskit-addon-sqd's carryover logic: keep all alpha/beta
-    string indices that appear in any amplitude > carryover_threshold.
-    """
-    # Read the alpha det strings (in order) to map indices back to integers
-    adet_strs = []
-    with open(adet_path) as f:
+def read_carryover_dets(filepath):
+    """Read carryover determinant file written by SBD (one binary string per line)."""
+    if not os.path.exists(filepath):
+        return np.array([], dtype=np.int64)
+    ci_strs = []
+    with open(filepath) as f:
         for line in f:
             line = line.strip()
             if line:
-                adet_strs.append(line)
-
-    # Parse wf.txt: each line is "amplitude # ia: alpha_bits ib: beta_bits"
-    n_a = len(adet_strs)
-    # Build amplitude matrix
-    amplitudes = {}
-    with open(wf_path) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            amp_str, rest = line.split(" # ", 1)
-            amp = float(amp_str)
-            # Parse "ia: alpha_bits ib: beta_bits"
-            parts = rest.split()
-            # Format: "0:" "bits" "0:" "bits" or similar
-            ia = int(parts[0].rstrip(':'))
-            ib = int(parts[2].rstrip(':'))
-            amplitudes[(ia, ib)] = amp
-
-    if not amplitudes:
-        return np.array([], dtype=np.int64), np.array([], dtype=np.int64)
-
-    # Find all (ia, ib) pairs where |amplitude| > threshold
-    alpha_indices = set()
-    beta_indices = set()
-    for (ia, ib), amp in amplitudes.items():
-        if abs(amp) > carryover_threshold:
-            alpha_indices.add(ia)
-            beta_indices.add(ib)
-
-    # Convert indices to CI string integers
-    carryover_a = np.array([int(adet_strs[ia], 2) for ia in sorted(alpha_indices)],
-                           dtype=np.int64)
-    # For symmetrize_spin, beta = alpha, so beta carryover uses same strings
-    carryover_b = np.array([int(adet_strs[ib], 2) for ib in sorted(beta_indices)],
-                           dtype=np.int64)
-
-    return carryover_a, carryover_b
+                ci_strs.append(int(line, 2))
+    return np.array(ci_strs, dtype=np.int64)
 
 
 def run_sbd(ci_strings_a, ci_strings_b, fcidump_path, sbd_exe, norb,
@@ -150,7 +110,8 @@ def run_sbd(ci_strings_a, ci_strings_b, fcidump_path, sbd_exe, norb,
             ci_strings_to_file(all_b, norb, bdet_path_actual)
             bdet_args = ["--bdetfile", bdet_path_actual]
 
-        wf_path = os.path.join(tmpdir, "wf.txt")
+        co_adet_path = os.path.join(tmpdir, "carryover_a.txt")
+        co_bdet_path = os.path.join(tmpdir, "carryover_b.txt")
 
         mpirun = os.environ.get("MPIRUN", "mpirun")
         cmd = [
@@ -165,13 +126,25 @@ def run_sbd(ci_strings_a, ci_strings_b, fcidump_path, sbd_exe, norb,
             "--tolerance", str(tolerance),
             "--rdm", "0",
             "--use_precalculated_dets", "1",
-            "--dump_matrix_form_wf", wf_path,
+            "--carryover_type", "1",
+            "--carryover_threshold", str(carryover_threshold),
+            "--carryover_adetfile", co_adet_path,
+            "--carryover_bdetfile", co_bdet_path,
         ]
 
         env = os.environ.copy()
-        env["OMP_NUM_THREADS"] = "1"
+        env["OMP_NUM_THREADS"] = os.environ.get("SBD_OMP_THREADS", "1")
 
         result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+
+        # Print SBD internal timing lines
+        for line in result.stdout.splitlines():
+            if 'Elapsed' in line or 'Davidson iteration' in line or 'Energy =' in line or 'carryover' in line.lower():
+                print(f"    [SBD] {line.strip()}")
+            if line.strip().startswith('Davidson iteration') and '.0' in line:
+                # Only print first sub-iteration of each Davidson restart to avoid spam
+                pass
+        sys.stdout.flush()
 
         if result.returncode != 0:
             print(f"SBD STDERR: {result.stderr}", file=sys.stderr)
@@ -182,11 +155,9 @@ def run_sbd(ci_strings_a, ci_strings_b, fcidump_path, sbd_exe, norb,
             print(f"SBD STDOUT: {result.stdout}", file=sys.stderr)
             raise RuntimeError("Failed to parse energy from SBD output")
 
-        # Extract carryover from CI amplitudes
-        co_a, co_b = np.array([], dtype=np.int64), np.array([], dtype=np.int64)
-        if os.path.exists(wf_path):
-            co_a, co_b = extract_carryover_from_wf(
-                wf_path, adet_path, norb, carryover_threshold)
+        # Read carryover determinants written by SBD
+        co_a = read_carryover_dets(co_adet_path)
+        co_b = read_carryover_dets(co_bdet_path)
 
         # Use separate alpha/beta occupancies if available, else fall back to density/2
         if density_alpha is not None and density_beta is not None:
@@ -319,7 +290,7 @@ def main():
                         help="Path to pre-generated semiclassical counts pickle")
     parser.add_argument("--resume", action="store_true",
                         help="Resume from checkpoint if available")
-    parser.add_argument("adapt_iterations", type=int, nargs='*', default=[1, 2, 3, 4, 5, 10, 20, 25, 30, 40])
+    parser.add_argument("adapt_iterations", type=int, nargs='*', default=[])
     args = parser.parse_args()
 
     if not args.semiclassical_counts and not args.adapt_iterations:
@@ -423,6 +394,7 @@ def main():
 
         # Step 1: Postselect or Recover configurations
         # Key: always operate on the RAW bitstrings, not pre-filtered ones
+        t_step = time.time()
         if current_occupancies is not None:
             # Config recovery: fixes bitstrings to match expected occupancies
             # and guarantees correct Hamming weight
@@ -436,17 +408,20 @@ def main():
                 raw_bs_matrix, raw_probs,
                 hamming_right=n_alpha, hamming_left=n_beta
             )
+        t_postselect = time.time() - t_step
 
         pool_size = len(bitstrings)
-        print(f"  After postselect/recovery: {pool_size} unique bitstrings")
+        print(f"  After postselect/recovery: {pool_size} unique bitstrings ({t_postselect:.1f}s)")
 
         # Step 2: Subsample batches
+        t_step = time.time()
         batches = subsample(
             bitstrings, probs,
             samples_per_batch=args.samples_per_batch,
             num_batches=args.num_batches,
             rand_seed=rng,
         )
+        t_subsample = time.time() - t_step
 
         # Step 3: Diagonalize each batch via SBD
         batch_energies = []
@@ -454,8 +429,11 @@ def main():
         batch_carryover = []
         batch_ci_counts = []
 
+        t_sbd_total = 0.0
         for b, batch in enumerate(batches):
+            t_step = time.time()
             ci_strings = extract_ci_strings(batch, n_orbitals)
+            t_extract = time.time() - t_step
             ci_alpha = ci_strings
             ci_beta = None
             n_dets = len(ci_strings) ** 2
@@ -464,23 +442,37 @@ def main():
                   f"({n_dets} determinants)")
             sys.stdout.flush()
 
-            energy, density, occ_alpha, occ_beta, co_a, co_b = run_sbd(
-                ci_strings_a=ci_alpha,
-                ci_strings_b=ci_beta,
-                fcidump_path=fcidump_path,
-                sbd_exe=args.sbd_exe,
-                norb=n_orbitals,
-                carryover_a=carryover_a,
-                carryover_b=carryover_b,
-                carryover_threshold=args.carryover_threshold,
-                block=10,
-                tolerance=1e-9,
-                max_davidson=10000,
-                num_gpus=args.num_gpus,
-            )
+            t_step = time.time()
+            try:
+                energy, density, occ_alpha, occ_beta, co_a, co_b = run_sbd(
+                    ci_strings_a=ci_alpha,
+                    ci_strings_b=ci_beta,
+                    fcidump_path=fcidump_path,
+                    sbd_exe=args.sbd_exe,
+                    norb=n_orbitals,
+                    carryover_a=carryover_a,
+                    carryover_b=carryover_b,
+                    carryover_threshold=args.carryover_threshold,
+                    block=10,
+                    tolerance=1e-9,
+                    max_davidson=10000,
+                    num_gpus=args.num_gpus,
+                )
+            except RuntimeError as e:
+                print(f"\n  SBD CRASHED at iteration {iteration + 1}, batch {b}: {e}")
+                print(f"  Determinants: {n_dets}, CI strings: {len(ci_strings)}")
+                # Log crash to stats file
+                with open(stats_file, 'a') as sf:
+                    sf.write(f"# CRASHED iteration={iteration+1} batch={b} dets={n_dets}\n")
+                print(f"  Crash logged to {stats_file}")
+                print(f"  Checkpoint from iteration {iteration} is preserved for --resume")
+                sys.exit(1)
 
+            t_sbd_batch = time.time() - t_step
+            t_sbd_total += t_sbd_batch
             total_energy = energy + ecore
-            print(f"  Batch {b}: energy = {total_energy:.10f}")
+            print(f"  Batch {b}: energy = {total_energy:.10f} "
+                  f"(extract={t_extract:.1f}s, sbd={t_sbd_batch:.1f}s)")
             batch_energies.append(total_energy)
             batch_occupancies.append((occ_alpha, occ_beta))
             batch_carryover.append((co_a, co_b))
@@ -544,8 +536,11 @@ def main():
             'wall_sec': iter_wall_sec,
         }
         iteration_stats.append(stats)
+        t_other = iter_wall_sec - t_postselect - t_subsample - t_sbd_total
         print(f"  Wall time: {iter_wall_sec:.1f}s | CI strings: {best_ci_count} | "
               f"Dets: {n_dets_approx} | Pool: {pool_size} | Carryover: {n_carryover}")
+        print(f"  Timing: postselect={t_postselect:.1f}s, subsample={t_subsample:.1f}s, "
+              f"sbd={t_sbd_total:.1f}s, other={t_other:.1f}s")
 
         # Checkpoint: save state after each iteration
         np.savetxt(energy_file, iteration_energies)
