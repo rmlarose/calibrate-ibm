@@ -102,6 +102,7 @@ FRAGMENTS = [
         'plots_dir': 'plots',
         'hamiltonian': os.path.join(SCRIPT_DIR, '..', '..', 'metaphosphate', 'hamiltonians',
                                     'metaphosphate-2026.fcidump'),
+        'ccsd_override': -1122.070838,  # DUCC-CCSD (ECORE + active-space DUCC-CCSD)
     },
 ]
 
@@ -539,13 +540,16 @@ def main():
             print(f"  HF energy: {e_hf:.6f} Ha")
 
         # Look up CCSD energy
-        e_ccsd = None
-        frag_ccsd = ccsd_data.get(frag['fragment_name'])
-        if frag_ccsd:
-            e_ccsd = frag_ccsd['CCSD']
-            print(f"  CCSD energy: {e_ccsd:.6f} Ha")
+        e_ccsd = frag.get('ccsd_override')
+        if e_ccsd is not None:
+            print(f"  CCSD energy: {e_ccsd:.6f} Ha (override)")
         else:
-            print(f"  CCSD energy: not available for {frag['fragment_name']}")
+            frag_ccsd = ccsd_data.get(frag['fragment_name'])
+            if frag_ccsd:
+                e_ccsd = frag_ccsd['CCSD']
+                print(f"  CCSD energy: {e_ccsd:.6f} Ha")
+            else:
+                print(f"  CCSD energy: not available for {frag['fragment_name']}")
 
         make_fragment_plots(frag, e_hf, e_ccsd)
 
