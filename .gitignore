@@ -173,6 +173,7 @@ cython_debug/
 # Large data files
 *.wf
 *.tar
+*.fcidump.bin
 
 # macOS metadata
 .DS_Store

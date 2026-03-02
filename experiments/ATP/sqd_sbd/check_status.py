@@ -23,29 +23,48 @@ STANDARD_VARIANTS = [
 ]
 
 # Fragment definitions
+# raw_results_dir: directory with raw bitstring files (for discovering available ADAPT iters)
+ATP_RESULTS = os.path.join(SCRIPT_DIR, '..', 'results')
+META_RESULTS = os.path.join(SCRIPT_DIR, '..', '..', 'metaphosphate', 'results')
+
 FRAGMENTS = [
     {
         'label': 'ATP f4',
+        'fragment_name': 'atp_0_be2_f4',
         'norb': 32, 'nelec': 32,
         'base': SCRIPT_DIR,
         'results_prefix': 'f4/results',
+        'raw_results_dir': os.path.join(ATP_RESULTS, 'atp_0_be2_f4'),
     },
     {
         'label': 'ATP f2',
+        'fragment_name': 'atp_0_be2_f2',
         'norb': 44, 'nelec': 44,
         'base': SCRIPT_DIR,
         'results_prefix': 'f2/results',
-        'stale_variants': ['Hardware'],  # old 100k-only data, will be rerun with pooled shots
+        'raw_results_dir': os.path.join(ATP_RESULTS, 'atp_0_be2_f2'),
+        # stale_variants removed: fresh runs with pooled shots now in progress
+    },
+    {
+        'label': 'ATP f18',
+        'fragment_name': 'atp_0_be2_f18',
+        'norb': 57, 'nelec': 58,
+        'base': SCRIPT_DIR,
+        'results_prefix': 'f18/results',
+        'raw_results_dir': os.path.join(ATP_RESULTS, 'atp_0_be2_f18'),
     },
     {
         'label': 'Metaphosphate',
+        'fragment_name': 'metaphosphate-2026',
         'norb': 22, 'nelec': 32,
         'base': os.path.join(SCRIPT_DIR, '..', '..', 'metaphosphate', 'sqd_sbd'),
         'results_prefix': 'results',
+        'raw_results_dir': os.path.join(META_RESULTS, 'metaphosphate-2026'),
+        'paused_variants': ['Random Hamming 50k', 'Random IID 50k'],
     },
 ]
 
-CONVERGENCE_THRESHOLD = 1e-7
+CONVERGENCE_THRESHOLD = 1e-8
 
 
 def load_run(run_dir):
@@ -83,14 +102,20 @@ def load_run(run_dir):
     elif num_iters == 1:
         delta = float('inf')
 
-    # Load stats for determinant counts and wall time
+    # Load stats for determinant counts, wall time, and crash status
     stats_files = [f for f in os.listdir(run_dir) if f.startswith("sqd_stats_")]
     ci_strings = None
     determinants = None
     total_wall = None
+    crashed = False
     if stats_files:
         stats_path = os.path.join(run_dir, stats_files[0])
         try:
+            # Check for CRASHED marker
+            with open(stats_path) as sf:
+                for line in sf:
+                    if line.startswith('# CRASHED'):
+                        crashed = True
             data = np.loadtxt(stats_path)
             if data.ndim == 1:
                 data = data.reshape(1, -1)
@@ -104,6 +129,7 @@ def load_run(run_dir):
         'energy': best_energy,
         'iters': num_iters,
         'converged': converged,
+        'crashed': crashed,
         'delta': delta,
         'ci_strings': ci_strings,
         'determinants': determinants,
@@ -161,25 +187,26 @@ def print_variant(fragment_label, variant_name, variant_dir, norb, nelec,
 
     if not singletons and not cumulatives:
         print(f"  (no runs yet)")
-        return 0, 0
+        return 0, 0, 0.0
 
     print(f"  {'Config':<45s}  {'Energy (Ha)':>14s}  {'Iters':>6s}  {'Conv':>4s}  "
           f"{'Delta':>10s}  {'Dets':>10s}  {'Wall':>8s}")
 
     total = 0
     conv = 0
+    worst_delta = 0.0
     for name, path in singletons + cumulatives:
         result = load_run(path)
         if result is None:
             continue
 
-        conv_str = "YES" if result['converged'] else "no"
+        conv_str = "CRASH" if result['crashed'] else ("YES" if result['converged'] else "no")
         det_str = f"{result['determinants']:,}" if result['determinants'] else "?"
         wall_str = f"{result['wall_sec']:.0f}s" if result['wall_sec'] else "?"
         delta_str = f"{result['delta']:.2e}" if result['delta'] != float('inf') else "N/A"
 
         print(f"  {name:<45s}  {result['energy']:>14.4f}  {result['iters']:>6d}  "
-              f"{conv_str:>4s}  {delta_str:>10s}  {det_str:>10s}  {wall_str:>8s}")
+              f"{conv_str:>5s}  {delta_str:>10s}  {det_str:>10s}  {wall_str:>8s}")
 
         result['config'] = name
         result['fragment'] = fragment_label
@@ -188,22 +215,30 @@ def print_variant(fragment_label, variant_name, variant_dir, norb, nelec,
         total += 1
         if result['converged']:
             conv += 1
+        if result['delta'] != float('inf') and result['delta'] > worst_delta:
+            worst_delta = result['delta']
 
-    return total, conv
+    return total, conv, worst_delta
 
 
-def discover_adapt_iters(frag_base, results_prefix):
-    """Discover available ADAPT iterations from hardware singleton directories."""
-    hw_dir = os.path.join(frag_base, results_prefix, 'hardware')
-    adapt_iters = []
-    if os.path.isdir(hw_dir):
-        for name in os.listdir(hw_dir):
-            if name.startswith('singleton_'):
-                parts = name.split('_')
-                try:
-                    adapt_iters.append(int(parts[1]))
-                except (ValueError, IndexError):
-                    pass
+def discover_adapt_iters(raw_results_dir, fragment_name):
+    """Discover available ADAPT iterations from raw bitstring files.
+
+    Scans the raw results directory for files matching
+    <fragment_name>_<NNN>_adaptiterations.qasm_counts_*
+    and extracts the ADAPT iteration numbers.
+    """
+    import re
+    adapt_iters = set()
+    raw_dir = os.path.realpath(raw_results_dir)
+    if os.path.isdir(raw_dir):
+        pattern = re.compile(
+            rf'^{re.escape(fragment_name)}_(\d+)_adaptiterations\.qasm_counts_'
+        )
+        for name in os.listdir(raw_dir):
+            m = pattern.match(name)
+            if m:
+                adapt_iters.add(int(m.group(1)))
     return sorted(adapt_iters)
 
 
@@ -231,7 +266,9 @@ def main():
         base = os.path.realpath(frag['base'])
         prefix = frag['results_prefix']
         stale_variants = frag.get('stale_variants', [])
-        adapt_iters = discover_adapt_iters(base, prefix)
+        paused_variants = frag.get('paused_variants', [])
+        adapt_iters = discover_adapt_iters(frag.get('raw_results_dir', ''),
+                                            frag.get('fragment_name', ''))
         n_adapt = len(adapt_iters)
         if adapt_iters:
             print(f"\n{frag['label']}: {n_adapt} ADAPT iterations available: {adapt_iters}")
@@ -239,26 +276,31 @@ def main():
         for variant_name, variant_suffix in STANDARD_VARIANTS:
             variant_dir = os.path.join(base, prefix, variant_suffix)
             is_stale = variant_name in stale_variants
-            total, conv = print_variant(frag['label'], variant_name, variant_dir,
+            is_paused = variant_name in paused_variants
+            total, conv, worst_delta = print_variant(frag['label'], variant_name, variant_dir,
                                         frag['norb'], frag['nelec'], all_results,
                                         stale=is_stale)
             exp = expected_runs(variant_name, n_adapt)
-            category_stats.append((frag['label'], variant_name, total, conv, is_stale, exp))
+            category_stats.append((frag['label'], variant_name, total, conv, is_stale, is_paused, exp, worst_delta))
 
     # Summary table
     print(f"\n{'='*95}")
-    print(f"  {'Fragment':<20s}  {'Variant':<22s}  {'Expect':>6s}  {'Done':>6s}  {'Conv':>6s}  {'Unconv':>6s}  {'Remain':>6s}")
-    print(f"  {'-'*20}  {'-'*22}  {'-'*6}  {'-'*6}  {'-'*6}  {'-'*6}  {'-'*6}")
+    print(f"  {'Fragment':<20s}  {'Variant':<22s}  {'Expect':>6s}  {'Done':>6s}  {'Conv':>6s}  {'Unconv':>6s}  {'Remain':>6s}  {'Worst dE':>10s}")
+    print(f"  {'-'*20}  {'-'*22}  {'-'*6}  {'-'*6}  {'-'*6}  {'-'*6}  {'-'*6}  {'-'*10}")
     total_exp = 0
     total_done = 0
     total_conv = 0
     total_remain = 0
-    for frag_label, variant_name, total, conv, stale, exp in category_stats:
+    for frag_label, variant_name, total, conv, stale, paused, exp, worst_delta in category_stats:
         if stale:
             # Stale = needs full redo
             done = 0
             remain = exp
             status = " STALE"
+        elif paused:
+            done = total
+            remain = max(0, exp - conv)
+            status = " PAUSED"
         else:
             done = total
             remain = max(0, exp - conv)  # unconverged + not yet started
@@ -266,12 +308,13 @@ def main():
             if total == 0 and exp > 0:
                 status = " NOT STARTED"
         unconv = done - conv
+        worst_str = f"{worst_delta:.2e}" if worst_delta > 0 else ""
         total_exp += exp
         total_done += done
         total_conv += conv
         total_remain += remain
-        print(f"  {frag_label:<20s}  {variant_name:<22s}  {exp:>6d}  {done:>6d}  {conv:>6d}  {unconv:>6d}  {remain:>6d}{status}")
-    print(f"  {'-'*20}  {'-'*22}  {'-'*6}  {'-'*6}  {'-'*6}  {'-'*6}  {'-'*6}")
+        print(f"  {frag_label:<20s}  {variant_name:<22s}  {exp:>6d}  {done:>6d}  {conv:>6d}  {unconv:>6d}  {remain:>6d}  {worst_str:>10s}{status}")
+    print(f"  {'-'*20}  {'-'*22}  {'-'*6}  {'-'*6}  {'-'*6}  {'-'*6}  {'-'*6}  {'-'*10}")
     print(f"  {'TOTAL':<20s}  {'':<22s}  {total_exp:>6d}  {total_done:>6d}  {total_conv:>6d}  "
           f"{total_done - total_conv:>6d}  {total_remain:>6d}")
     print(f"{'='*95}")
@@ -305,8 +348,9 @@ def main():
             'categories': [
                 {'fragment': f, 'variant': v, 'expected': e, 'total': t,
                  'converged': c, 'unconverged': t - c, 'stale': s,
+                 'paused': p, 'worst_delta': wd,
                  'remaining': max(0, e - c) if not s else e}
-                for f, v, t, c, s, e in category_stats
+                for f, v, t, c, s, p, e, wd in category_stats
             ],
             'runs': json_results,
         }, f, indent=2)

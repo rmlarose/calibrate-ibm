@@ -85,6 +85,15 @@ FRAGMENTS = [
         'hamiltonian': os.path.join(SCRIPT_DIR, '..', 'hamiltonians', 'atp_0_be2_f2.fcidump'),
     },
     {
+        'label': 'ATP f18',
+        'fragment_name': 'atp_0_be2_f18',
+        'norb': 57, 'nelec': 58,
+        'base': SCRIPT_DIR,
+        'results_prefix': 'f18/results',
+        'plots_dir': 'f18/plots',
+        'hamiltonian': os.path.join(SCRIPT_DIR, '..', 'hamiltonians', 'atp_0_be2_f18.fcidump'),
+    },
+    {
         'label': 'Metaphosphate',
         'fragment_name': 'metaphosphate-2026',
         'norb': 22, 'nelec': 32,
@@ -411,7 +420,7 @@ def make_fragment_plots(frag, e_hf, e_ccsd=None):
     fig, ax = plt.subplots(figsize=(10, 6))
     title = f'SQD Energy: {frag["label"]} ({frag["norb"]} orb, {frag["nelec"]} elec)'
     make_energy_plot(ax, hw_variants, [], adapt_iters, e_hf, e_ccsd,
-                     e_random_best, None, title)
+                     None, None, title)
     fig.tight_layout()
     path = os.path.join(plots_dir, "singleton_vs_cumulative.png")
     fig.savefig(path, dpi=150)
