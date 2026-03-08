@@ -1,0 +1,12 @@
+Water Molecule; Expt Geometry from CCCBDB
+Index       Basis           N_qubits        Directory
+1           STO-3G          14              sto-3g
+2           6-31G           26              6-31g
+3           6-311G          38              6-311g
+4           6-311G*         48              6-311gs
+5           cc-pVDZ         48              cc-pvdz
+6           6-311G**        60              6-311gss
+7           6-311+G**       68              6-311pgss
+8           6-311++G**      72              6-311ppgss
+9           aug-cc-pVDZ     82              aug-cc-pvdz
+10          cc-pVTZ         116             cc-pvtz
