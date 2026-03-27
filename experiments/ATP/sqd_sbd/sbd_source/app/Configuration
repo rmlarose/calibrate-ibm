@@ -1,0 +1,11 @@
+# Path to the SBD library
+SBD_PATH=../..
+
+# MSU ICER: MPI C++ compiler (NVHPC + CUDA)
+CCCOM=mpicxx
+
+# MSU ICER GPU build: nvc++ with CUDA + Thrust
+CCFLAGS= -mp -cuda -fast --diag_suppress declared_but_not_referenced,set_but_not_used -gpu=cc90 -DSBD_THRUST
+
+# MSU ICER: FlexiBLAS (wraps OpenBLAS, provides LAPACK+BLAS)
+SYSLIB= -lflexiblas
