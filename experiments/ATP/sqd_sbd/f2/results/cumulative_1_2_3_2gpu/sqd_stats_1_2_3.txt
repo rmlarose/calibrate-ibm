@@ -1,0 +1,3 @@
+# iter              energy  ci_strings  determinants   pool_size   carryover    wall_sec
+     1     -422.4221450175         381        145161        7750         342        16.2
+     2     -422.4424961793         357        127449       35009         508        46.5
