@@ -1,0 +1,12 @@
+# Note that RHF is lower here than in the ADAPT output. That is because the 
+# FCIDUMP orbitals are not strictly canonical, so these energies are with
+# canonical orbitals, so there's a few mH difference. If we need good
+# reference energies for comparison, I can run ASCI, which is probablly
+# more appropriate here.
+
+RHF         −307.7311961370
+MP2         −308.0048838656
+CCSD        −308.0468776552
+CCSD(T)     −308.0534511934
+
+
